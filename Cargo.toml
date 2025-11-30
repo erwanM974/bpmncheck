@@ -1,0 +1,25 @@
+[package]
+name = "bpmncheck"
+version = "0.0.1"
+authors = ["Erwan Mahe"]
+edition = "2024"
+
+
+license = "Apache-2.0"
+description = "A library to sanity-check Business Process Model Notation models"
+
+readme = "README.md"
+repository = "https://github.com/erwanM974/bpmncheck"
+homepage = "https://github.com/erwanM974/bpmncheck"
+
+keywords = ["bpmn", "model-checking"]
+
+[dependencies]
+xml                  = "1.2.0"
+thiserror            = "2.0.17"
+map-macro            = "0.3.0"
+graphviz_dot_builder = "0.1.5"
+itertools            = "0.14.0"
+nom                  = "8.0.0"
+petricheck           = "0.1.0"
+citreelo             = "0.1.1"
