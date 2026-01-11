@@ -59,12 +59,10 @@ pub fn read_bpmn<R: BufRead>(mut reader: EventReader<R>) -> Result<Diagram, Bpmn
             Ok(XmlEvent::StartElement{name,attributes,namespace}) => {
                 if name.local_name.as_str() == BPMN_DEFINITIONS {
                     return read_bpmn_content(reader);
-                } else {
-                println!("got {:?}", XmlEvent::StartElement{name,attributes,namespace});
                 }
             },
-            Ok(x) => {
-                println!("got {:?}", x);
+            Ok(_) => {
+                // 
             },
             Err(e) => {
                 return Err(BpmnParsingError::Xml(e))

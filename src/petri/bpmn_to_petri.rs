@@ -158,21 +158,25 @@ pub fn bpmn_to_petri(
                 }
             },
             GatewayType::Inclusive => {
-                // for each subset X of the inputs and each subset Y of the outputs
+                // for each non-empty subset X of the inputs and each non-empty subset Y of the outputs
                 // there is a transition X->Y
                 let inputs_combinations = inputs.iter().powerset().collect::<Vec<_>>();
                 let outputs_combinations = outputs.iter().powerset().collect::<Vec<_>>();
                 let mut tr_ids = HashSet::new();
                 for input_subset in inputs_combinations {
-                    for output_subset in outputs_combinations.clone() {
-                        let tr_id = petri_net.add_transition(
-                            PetriTransition::new(
-                                Some(gate_transition_label.clone()),
-                                input_subset.clone().into_iter().cloned().map(|x| (x,1)).collect(), 
-                                output_subset.into_iter().cloned().map(|x| (x,1)).collect(),
-                                )
-                        );
-                        tr_ids.insert(tr_id);
+                    if !input_subset.is_empty() {
+                        for output_subset in outputs_combinations.clone() {
+                            if !output_subset.is_empty() {
+                                let tr_id = petri_net.add_transition(
+                                    PetriTransition::new(
+                                        Some(gate_transition_label.clone()),
+                                        input_subset.clone().into_iter().cloned().map(|x| (x,1)).collect(), 
+                                        output_subset.into_iter().cloned().map(|x| (x,1)).collect(),
+                                        )
+                                );
+                                tr_ids.insert(tr_id);
+                            }
+                        }
                     }
                 }
             }
