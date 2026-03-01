@@ -19,6 +19,7 @@ limitations under the License.
 #[derive(Debug)]
 pub enum BpmnToPetriTranslationError {
     SubProcessMustHaveOneStartEvent,
-    SubProcessMustHaveOneEndEvent
+    SubProcessMustHaveOneEndEvent,
+    SubProcessCanHaveAtMostOneBoundaryEvent
 }
 

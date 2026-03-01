@@ -52,9 +52,9 @@ impl Event {
 }
 
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventType {
-    Boundary,
+    Boundary(BpmnId),
     End,
     IntermediateCatch,
     IntermediateThrow,

@@ -42,7 +42,23 @@ impl Activity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivityType {
-    Task,
+    Task(TaskKind),
+    //CallActivity,
+    SubProcess(ProcessContentRef),
+}
+
+impl ActivityType {
+    pub fn is_task(&self) -> bool {
+        match self {
+            ActivityType::Task(_) => true,
+            ActivityType::SubProcess(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskKind {
+    DefaultTask,
     ServiceTask,
     UserTask,
     ScriptTask,
@@ -50,8 +66,4 @@ pub enum ActivityType {
     SendTask,
     ManualTask,
     BusinessRuleTask,
-    CallActivity,
-    SubProcess(ProcessContentRef),
 }
-
-

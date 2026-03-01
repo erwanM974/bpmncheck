@@ -22,7 +22,7 @@ use std::io::BufRead;
 use xml::reader::XmlEvent;
 use xml::EventReader;
 
-use crate::model::activity::{Activity, ActivityType};
+use crate::model::activity::{Activity, ActivityType, TaskKind};
 use crate::model::diagram::ProcessContentRef;
 use crate::model::flow::{Flow, FlowKind};
 use crate::model::gateway::Gateway;
@@ -40,16 +40,16 @@ use crate::model::event::{Event};
 
 
 pub struct NestedElements {
-    pub events     : HashMap<BpmnId,Event>,
-    pub activities : HashMap<BpmnId,Activity>,
-    pub gateways   : HashMap<BpmnId,Gateway>,
-    pub flows      : HashMap<BpmnId,Flow>,
-    pub data       : HashMap<BpmnId,String>
+    pub events         : HashMap<BpmnId,Event>,
+    pub activities     : HashMap<BpmnId,Activity>,
+    pub gateways       : HashMap<BpmnId,Gateway>,
+    pub sequence_flows : HashMap<BpmnId,Flow>,
+    pub data           : HashMap<BpmnId,String>
 }
 
 impl NestedElements {
-    pub fn new(events: HashMap<BpmnId,Event>, activities: HashMap<BpmnId,Activity>, gateways : HashMap<BpmnId,Gateway>, flows: HashMap<BpmnId,Flow>, data: HashMap<BpmnId,String>) -> Self {
-        Self { events, activities, gateways, flows, data }
+    pub fn new(events: HashMap<BpmnId,Event>, activities: HashMap<BpmnId,Activity>, gateways : HashMap<BpmnId,Gateway>, sequence_flows: HashMap<BpmnId,Flow>, data: HashMap<BpmnId,String>) -> Self {
+        Self { events, activities, gateways, sequence_flows, data }
     }
     
     pub fn new_empty() -> Self {
@@ -65,7 +65,7 @@ impl NestedElements {
         self.events.extend(other.events);
         self.activities.extend(other.activities);
         self.gateways.extend(other.gateways);
-        self.flows.extend(other.flows);
+        self.sequence_flows.extend(other.sequence_flows);
         self.data.extend(other.data);
     }
 }
@@ -75,13 +75,21 @@ pub struct ActivityParsingReturnValue {
     pub direct_child_events     : BTreeSet<BpmnId>,
     pub direct_child_activities : BTreeSet<BpmnId>,
     pub direct_child_gateways   : BTreeSet<BpmnId>,
-    pub input_data              : HashSet<BpmnId>, // might be the case for subProcesses
-    pub output_data             : HashSet<BpmnId>, // might be the case for subProcesses
+    pub direct_child_flows      : BTreeSet<BpmnId>,
+    pub input_data              : HashSet<BpmnId>, 
+    pub output_data             : HashSet<BpmnId>,
 }
 
 impl ActivityParsingReturnValue {
-    pub fn new(nested_elements: NestedElements, direct_child_events: BTreeSet<BpmnId>, direct_child_activities: BTreeSet<BpmnId>, direct_child_gateways : BTreeSet<BpmnId>, input_data: HashSet<BpmnId>, output_data: HashSet<BpmnId>) -> Self {
-        Self { nested_elements, direct_child_events, direct_child_activities, direct_child_gateways, input_data, output_data }
+    pub fn new(
+        nested_elements         : NestedElements, 
+        direct_child_events     : BTreeSet<BpmnId>, 
+        direct_child_activities : BTreeSet<BpmnId>, 
+        direct_child_gateways   : BTreeSet<BpmnId>, 
+        direct_child_flows      : BTreeSet<BpmnId>,
+        input_data              : HashSet<BpmnId>, 
+        output_data             : HashSet<BpmnId>) -> Self {
+        Self { nested_elements, direct_child_events, direct_child_activities, direct_child_gateways, direct_child_flows, input_data, output_data }
     }
 }
 
@@ -104,6 +112,7 @@ pub fn read_activity<R: BufRead>(
     let mut direct_child_events = BTreeSet::new();
     let mut direct_child_activities = BTreeSet::new();
     let mut direct_child_gateways = BTreeSet::new();
+    let mut direct_child_flows = BTreeSet::new();
     // ***
     loop {
         match reader.next() {
@@ -111,7 +120,8 @@ pub fn read_activity<R: BufRead>(
                 match name.local_name.as_str() {
                     BPMN_SEQUENCE_FLOW => {
                         let flow = read_flow(FlowKind::Sequence, collect_attributes(attributes))?;
-                        elements.flows.insert(flow.id.clone(), flow);
+                        direct_child_flows.insert(flow.id.clone());
+                        elements.sequence_flows.insert(flow.id.clone(), flow);
                     },
                     BPMN_DATA_OBJECT_REFERENCE => {
                         let (data_id,data_name) = read_data_object_reference(collect_attributes(attributes))?;
@@ -161,7 +171,11 @@ pub fn read_activity<R: BufRead>(
                         let sub_act = read_activity(reader, act_type)?;
                         let (static_tag,activity_type) = read_activity_type(
                             act_type,
-                            ProcessContentRef::new(sub_act.direct_child_events, sub_act.direct_child_activities, sub_act.direct_child_gateways)
+                            ProcessContentRef::new(
+                                sub_act.direct_child_events, 
+                                sub_act.direct_child_activities, 
+                                sub_act.direct_child_gateways, 
+                                sub_act.direct_child_flows)
                         )?;
                         let (task_id,task_name) = read_task_attributes(static_tag,collect_attributes(attributes))?;
                         let act = Activity::new(
@@ -191,6 +205,7 @@ pub fn read_activity<R: BufRead>(
         direct_child_events,
         direct_child_activities,
         direct_child_gateways,
+        direct_child_flows,
         input_data,
         output_data
     );
@@ -213,15 +228,15 @@ pub fn read_activity_type(
     content_ref : ProcessContentRef
 ) -> Result<(&'static str,ActivityType),BpmnParsingError> {
     match tag {
-        BPMN_TASK               => Ok((BPMN_TASK,ActivityType::Task)),
-        BPMN_SERVICE_TASK       => Ok((BPMN_SERVICE_TASK,ActivityType::ServiceTask)),
-        BPMN_USER_TASK          => Ok((BPMN_USER_TASK,ActivityType::UserTask)),
-        BPMN_SCRIPT_TASK        => Ok((BPMN_SCRIPT_TASK,ActivityType::ScriptTask)),
-        BPMN_RECEIVE_TASK       => Ok((BPMN_RECEIVE_TASK,ActivityType::ReceiveTask)),
-        BPMN_SEND_TASK          => Ok((BPMN_SEND_TASK,ActivityType::SendTask)),
-        BPMN_MANUAL_TASK        => Ok((BPMN_MANUAL_TASK,ActivityType::ManualTask)),
-        BPMN_BUSINESS_RULE_TASK => Ok((BPMN_BUSINESS_RULE_TASK,ActivityType::BusinessRuleTask)),
-        BPMN_CALL_ACTIVITY      => Ok((BPMN_CALL_ACTIVITY,ActivityType::CallActivity)),
+        BPMN_TASK               => Ok((BPMN_TASK,ActivityType::Task(TaskKind::DefaultTask))),
+        BPMN_SERVICE_TASK       => Ok((BPMN_SERVICE_TASK,ActivityType::Task(TaskKind::ServiceTask))),
+        BPMN_USER_TASK          => Ok((BPMN_USER_TASK,ActivityType::Task(TaskKind::UserTask))),
+        BPMN_SCRIPT_TASK        => Ok((BPMN_SCRIPT_TASK,ActivityType::Task(TaskKind::ScriptTask))),
+        BPMN_RECEIVE_TASK       => Ok((BPMN_RECEIVE_TASK,ActivityType::Task(TaskKind::ReceiveTask))),
+        BPMN_SEND_TASK          => Ok((BPMN_SEND_TASK,ActivityType::Task(TaskKind::SendTask))),
+        BPMN_MANUAL_TASK        => Ok((BPMN_MANUAL_TASK,ActivityType::Task(TaskKind::ManualTask))),
+        BPMN_BUSINESS_RULE_TASK => Ok((BPMN_BUSINESS_RULE_TASK,ActivityType::Task(TaskKind::BusinessRuleTask))),
+        //BPMN_CALL_ACTIVITY      => Ok((BPMN_CALL_ACTIVITY,ActivityType::CallActivity)),
         BPMN_SUB_PROCESS        => Ok((BPMN_SUB_PROCESS,ActivityType::SubProcess(content_ref))),
         //BPMN_TRANSACTION => Ok(ActivityType::Transaction),
         _ => Err(BpmnParsingError::UnknownActivityType)

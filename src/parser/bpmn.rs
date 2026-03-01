@@ -56,7 +56,7 @@ pub fn read_bpmn_diagram_from_file_path(path : &str) -> Result<Diagram,BpmnParsi
 pub fn read_bpmn<R: BufRead>(mut reader: EventReader<R>) -> Result<Diagram, BpmnParsingError> {
     loop {
         match reader.next() {
-            Ok(XmlEvent::StartElement{name,attributes,namespace}) => {
+            Ok(XmlEvent::StartElement{name,..}) => {
                 if name.local_name.as_str() == BPMN_DEFINITIONS {
                     return read_bpmn_content(reader);
                 }
@@ -95,7 +95,12 @@ pub fn read_bpmn_content<R: BufRead>(mut reader: EventReader<R>) -> Result<Diagr
                     let proc = Process::new(
                         BpmnId::new(id), 
                         None, 
-                        ProcessContentRef::new(got_proc.direct_child_events,got_proc.direct_child_activities,got_proc.direct_child_gateways)
+                        ProcessContentRef::new(
+                            got_proc.direct_child_events,
+                            got_proc.direct_child_activities,
+                            got_proc.direct_child_gateways,
+                            got_proc.direct_child_flows,
+                        )
                     );
                     top_level_processes.insert(proc.id.clone(),proc);
                 }
@@ -112,18 +117,28 @@ pub fn read_bpmn_content<R: BufRead>(mut reader: EventReader<R>) -> Result<Diagr
             _ => {}
         }
     }
-    let mut flows = content.flows;
-    if let Some((mut pref_to_name,message_flows)) = collab {
+    let mut message_flows = HashMap::new();
+    if let Some((mut pref_to_name,msg_flows)) = collab {
         for (proc_id,proc) in top_level_processes.iter_mut() {
             if let Some(participant_name) = pref_to_name.remove(&proc_id.id) {
                 proc.name = Some(participant_name);
             }
         }
-        for f in message_flows {
-            flows.insert(f.id.clone(), f);
+        for f in msg_flows {
+            message_flows.insert(f.id.clone(), f);
         }
     }
-    Ok(Diagram::new(top_level_processes,content.events,content.activities,content.gateways,flows,content.data))
+    Ok(
+        Diagram::new(
+            top_level_processes,
+            content.events,
+            content.activities,
+            content.gateways,
+            content.sequence_flows,
+            message_flows,
+            content.data
+        )
+    )
 }
 
 

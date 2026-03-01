@@ -1,6 +1,6 @@
 [package]
 name = "bpmncheck"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Erwan Mahe"]
 edition = "2024"
 
@@ -21,5 +21,5 @@ map-macro            = "0.3.0"
 graphviz_dot_builder = "0.1.5"
 itertools            = "0.14.0"
 nom                  = "8.0.0"
-petricheck           = "0.2.1"
+petricheck           = "0.2.3"
 citreelo             = "0.1.1"

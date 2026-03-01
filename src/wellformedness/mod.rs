@@ -15,18 +15,5 @@ limitations under the License.
 */
 
 
-pub mod model;
-pub mod parser;
-
-pub mod petri;
-pub mod viz;
-pub mod wellformedness;
-
-
-
-
-
-
-
-
-
+pub mod error;
+pub mod check;

@@ -43,6 +43,9 @@ pub const BPMN_BOUNDARY_EVENT           : &str = "boundaryEvent";
 pub const BPMN_INTERMEDIATE_CATCH_EVENT : &str = "intermediateCatchEvent";
 pub const BPMN_INTERMEDIATE_THROW_EVENT : &str = "intermediateThrowEvent";
 
+pub const BPMN_BOUNDARY_ATTACHED_REFERENCE : &str = "attachedToRef";
+
+
 /* 
 // Event symbol
 pub const CANCEL_EVENT_DEFINITION       : &str = "cancelEventDefinition";

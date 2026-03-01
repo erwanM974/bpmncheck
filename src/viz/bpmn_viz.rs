@@ -39,7 +39,7 @@ pub fn bpmn_subproc_repr(
             GraphvizNodeStyleItem::Label("".to_string())
             ];
         match &evt.event_type {
-            EventType::Boundary => {
+            EventType::Boundary(_) => {
                 style.push(GraphvizNodeStyleItem::Shape(GvNodeShape::Hexagon));
             },
             EventType::End => {
@@ -117,7 +117,17 @@ pub fn bpmn_repr(
         digraph.add_cluster(cluster);
     }
     // edges
-    for flow in bpmn.flows.values() {
+    for flow in bpmn.sequence_flows.values() {
+        let edge = GraphVizEdge::new(
+            flow.source_ref.id.clone(),
+            None,
+            flow.target_ref.id.clone(),
+            None,
+            vec![]
+        );
+        digraph.add_edge(edge);
+    }
+    for flow in bpmn.message_flows.values() {
         let edge = GraphVizEdge::new(
             flow.source_ref.id.clone(),
             None,

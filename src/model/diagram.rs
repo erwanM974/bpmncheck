@@ -26,11 +26,16 @@ pub struct ProcessContentRef {
     pub direct_child_events     : BTreeSet<BpmnId>,
     pub direct_child_activities : BTreeSet<BpmnId>,
     pub direct_child_gateways   : BTreeSet<BpmnId>,
+    pub direct_child_flows      : BTreeSet<BpmnId>,
 }
 
 impl ProcessContentRef {
-    pub fn new(direct_child_events: BTreeSet<BpmnId>, direct_child_activities: BTreeSet<BpmnId>, direct_child_gateways : BTreeSet<BpmnId>) -> Self {
-        Self { direct_child_events, direct_child_activities, direct_child_gateways }
+    pub fn new(
+        direct_child_events: BTreeSet<BpmnId>, 
+        direct_child_activities: BTreeSet<BpmnId>, 
+        direct_child_gateways : BTreeSet<BpmnId>, 
+        direct_child_flows   : BTreeSet<BpmnId>) -> Self {
+        Self { direct_child_events, direct_child_activities, direct_child_gateways, direct_child_flows }
     }
 }
 
@@ -60,13 +65,21 @@ pub struct Diagram {
     pub events : HashMap<BpmnId,Event>,
     pub activities : HashMap<BpmnId,Activity>,
     pub gateways : HashMap<BpmnId,Gateway>,
-    pub flows : HashMap<BpmnId,Flow>,
+    pub sequence_flows : HashMap<BpmnId,Flow>,
+    pub message_flows  : HashMap<BpmnId,Flow>,
     pub data : HashMap<BpmnId,String>
 }
 
 impl Diagram {
-    pub fn new(top_level_processes: BTreeMap<BpmnId,Process>, events: HashMap<BpmnId,Event>, activities: HashMap<BpmnId,Activity>, gateways: HashMap<BpmnId,Gateway>, flows: HashMap<BpmnId,Flow>, data: HashMap<BpmnId,String>) -> Self {
-        Self { top_level_processes, events, activities, gateways, flows, data }
+    pub fn new(
+        top_level_processes: BTreeMap<BpmnId,Process>, 
+        events: HashMap<BpmnId,Event>, 
+        activities: HashMap<BpmnId,Activity>, 
+        gateways: HashMap<BpmnId,Gateway>, 
+        sequence_flows: HashMap<BpmnId,Flow>, 
+        message_flows: HashMap<BpmnId,Flow>, 
+        data: HashMap<BpmnId,String>) -> Self {
+        Self { top_level_processes, events, activities, gateways, sequence_flows, message_flows, data }
     }
 }
 

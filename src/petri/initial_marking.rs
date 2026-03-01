@@ -15,18 +15,18 @@ limitations under the License.
 */
 
 
-pub mod model;
-pub mod parser;
 
-pub mod petri;
-pub mod viz;
-pub mod wellformedness;
+use std::collections::{BTreeMap, HashSet};
+
+use petricheck::model::marking::Marking;
 
 
 
-
-
-
-
-
+pub fn get_initial_marking_from_initial_places(initial_places : &HashSet<usize>) -> Marking {
+    let mut tokens = BTreeMap::new();
+    for place_id in initial_places {
+        tokens.insert(*place_id,1);
+    }
+    Marking::new(tokens)
+}
 

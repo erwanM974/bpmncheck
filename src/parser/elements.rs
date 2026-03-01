@@ -65,18 +65,22 @@ pub fn read_event<R: BufRead>(
         BPMN_END_EVENT                => Ok((BPMN_END_EVENT,EventType::End)),
         BPMN_INTERMEDIATE_CATCH_EVENT => Ok((BPMN_INTERMEDIATE_CATCH_EVENT,EventType::IntermediateCatch)),
         BPMN_INTERMEDIATE_THROW_EVENT => Ok((BPMN_INTERMEDIATE_THROW_EVENT,EventType::IntermediateThrow)),
-        BPMN_BOUNDARY_EVENT           => Ok((BPMN_BOUNDARY_EVENT,EventType::Boundary)),
+        BPMN_BOUNDARY_EVENT           => {
+            let attached : String = attrs
+                .remove(BPMN_BOUNDARY_ATTACHED_REFERENCE)
+                .ok_or(BpmnParsingError::MissingAttribute{att:BPMN_BOUNDARY_ATTACHED_REFERENCE,parent:BPMN_BOUNDARY_EVENT})?;
+            Ok((BPMN_BOUNDARY_EVENT,EventType::Boundary(BpmnId::new(attached))))
+        },
         _ => {
             Err(BpmnParsingError::ExpectedEventType)
         }
     }?;
     let id: String = attrs.remove(BPMN_ID).ok_or(BpmnParsingError::MissingAttribute{att:BPMN_ID,parent:static_tag})?;
-    
     let evt = Event::new(
         kind,
         None,
         BpmnId::new(id),
-        None
+        attrs.remove(BPMN_NAME)
     );
     loop {
         match reader.next() {
@@ -112,7 +116,7 @@ pub fn read_gate<R: BufRead>(
     let evt = Gateway::new(
         kind,
         BpmnId::new(id),
-        None
+        attrs.remove(BPMN_NAME)
     );
     loop {
         match reader.next() {

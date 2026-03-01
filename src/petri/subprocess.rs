@@ -16,67 +16,75 @@ limitations under the License.
 
 
 
-use std::{collections::{HashMap, HashSet}, rc::Rc};
+use std::{collections::{BTreeSet, HashMap, HashSet}, rc::Rc};
 
-use map_macro::hash_map;
+use itertools::Itertools;
+use map_macro::{btree_set, hash_map};
 use petricheck::model::{label::PetriTransitionLabel, net::PetriNet, transition::PetriTransition};
 
-use crate::{model::{activity::ActivityType, diagram::{Diagram, ProcessContentRef}, event::EventType, id::BpmnId}, petri::error::BpmnToPetriTranslationError};
+use crate::{model::{activity::ActivityType, diagram::{Diagram, ProcessContentRef}, event::EventType, gateway::GatewayType, id::BpmnId}, petri::{error::BpmnToPetriTranslationError, nesting::nest_sub_process}};
 
 
 
 
 pub struct Bpmn2PetriSubProcessRetVal {
-    // the ids of the places in the Petri Net that correspond to the origins of the BPMN sub-process' start events
-    pub initial_places : HashSet<usize>,
-    // the ids of the places in the Petri Net that correspond to the targets of the BPMN sub-process' end events
-    pub final_places   : HashSet<usize>,
-}
-
-impl Bpmn2PetriSubProcessRetVal {
-    fn new(initial_places: HashSet<usize>, final_places: HashSet<usize>) -> Self {
-        Self { initial_places, final_places }
-    }
+    // the PN that is the translation of the BPMN subprocess
+    // its initial and final places are the first and last places
+    pub petri_net : PetriNet,
+    pub initial_place : usize,
+    pub initial_transition : usize,
+    pub final_place : usize,
+    pub final_transition : usize,
+    // maps bpmn_id of events and activities to the place in the Petri Net from which it starts
+    pub bpmn_id_to_incoming_place : HashMap<BpmnId,usize>,
+    // maps bpmn_id of events and activities to the place in the Petri Net at which it ends
+    pub bpmn_id_to_outgoing_place : HashMap<BpmnId,usize>,
+    // maps bpmn_id of events and activities to reference to the transition labels in the Petri Net
+    pub bpmn_id_to_transitions_labels : HashMap<BpmnId,Rc<PetriTransitionLabel>>
 }
 
 
 
 pub fn sub_process_to_petri(
-    petri_net : &mut PetriNet,
-    // maps bpmn_id of events and activities to the place in the Petri Net from which it starts
-    bpmn_id_to_incoming_place : &mut HashMap<BpmnId,usize>, 
-    // maps bpmn_id of events and activities to the place in the Petri Net at which it ends
-    bpmn_id_to_outgoing_place : &mut HashMap<BpmnId,usize>, 
-    // maps bpmn_id of events and activities to reference to the transition labels in the Petri Net
-    bpmn_id_to_transitions_labels : &mut HashMap<BpmnId,Rc<PetriTransitionLabel>>,
     bpmn : &Diagram, 
-    sub_process : &ProcessContentRef
+    sub_process : &ProcessContentRef,
+    //relabelling : &HashMap<PetriTransitionLabel, Option<Rc<PetriTransitionLabel>>>
 ) -> Result<Bpmn2PetriSubProcessRetVal,BpmnToPetriTranslationError> {
-    let mut initial_places = HashSet::new();
-    let mut final_places = HashSet::new();
+    let mut petri_net = PetriNet::new_empty();
+    let mut bpmn_id_to_incoming_place = HashMap::new();
+    let mut bpmn_id_to_outgoing_place = HashMap::new();
+    let mut bpmn_id_to_transitions_labels = HashMap::new();
     // ***
-    for evt_id in &sub_process.direct_child_events {
-        let evt = bpmn.events.get(evt_id).unwrap();
-        let incoming = petri_net.add_place(None);
-        if evt.event_type == EventType::Start {
-            initial_places.insert(incoming);
-        }
-        let outgoing = petri_net.add_place(None);
-        if evt.event_type == EventType::End {
-            final_places.insert(outgoing);
-        }
-        let transition_label = Rc::new(PetriTransitionLabel::new(evt_id.id.clone()));
-        bpmn_id_to_transitions_labels.insert(evt_id.clone(),transition_label.clone());
-        let _ = petri_net.add_transition(
-            PetriTransition::new(
-                Some(transition_label),
-                hash_map!{incoming=>1}, 
-                hash_map!{outgoing=>1}
-            )
-        );
-        bpmn_id_to_incoming_place.insert(evt_id.clone(), incoming);
-        bpmn_id_to_outgoing_place.insert(evt_id.clone(), outgoing);
-    }
+    // add the initial and final places
+    let initial_place = petri_net.add_place(None);
+    let final_place = petri_net.add_place(None);
+    // ***
+    // add places for all events and extract pertinent information
+    let (initial_places,final_places,mut boundary_events_on_sub_processes) = translate_events(
+        bpmn,sub_process,&mut petri_net,
+        &mut bpmn_id_to_transitions_labels,
+        &mut bpmn_id_to_incoming_place,
+        &mut bpmn_id_to_outgoing_place
+    )?;
+    // ***
+    // add a transition from the initial place to all the possible multiple initial places
+    let initial_transition = petri_net.add_transition(
+        PetriTransition::new(
+            None,
+            hash_map!{initial_place=>1}, 
+            initial_places.into_iter().map(|p| (p,1)).collect()
+        )
+    );
+    // ***
+    // add a transition from all the possible multiple final places to the final place
+    let final_transition = petri_net.add_transition(
+        PetriTransition::new(
+            None,
+            final_places.into_iter().map(|p| (p,1)).collect(),
+            hash_map!{final_place=>1}, 
+        )
+    );
+
     // translate each BPMN activity into a subnet "(incoming) -**activity**> (outgoing)"
     // where **activity** is either:
     // - a Petri net transition if the activity is not a sub-process
@@ -84,64 +92,21 @@ pub fn sub_process_to_petri(
     for act_id in &sub_process.direct_child_activities {
         let act = bpmn.activities.get(act_id).unwrap();
         if let ActivityType::SubProcess(sub_proc) = &act.activity_type {
-            let sub_proc_ret_val = sub_process_to_petri(
-                petri_net,
-                bpmn_id_to_incoming_place,
-                bpmn_id_to_outgoing_place,
-                bpmn_id_to_transitions_labels, 
+            let sub_proc_ret_val: Bpmn2PetriSubProcessRetVal = sub_process_to_petri(
                 bpmn, 
-                sub_proc
+                sub_proc,
+                //relabelling
             )?;
-            match sub_proc_ret_val.initial_places.len() {
-                0 => {
-                    return Err(BpmnToPetriTranslationError::SubProcessMustHaveOneStartEvent);
-                },
-                1 => {
-                    // if the sub-process has a single start event, 
-                    // we can coincide the place that represent the origin of this start event
-                    // with the incoming place of the overall activity
-                    let initial_place_id = sub_proc_ret_val.initial_places.iter().next().unwrap();
-                    bpmn_id_to_incoming_place.insert(act_id.clone(),*initial_place_id);
-                },
-                _ => {
-                    // if the sub-process has several start events
-                    // we create an additional place
-                    // and a transition that feeds tokens into each of the place corresponding to the origins of these start events
-                    let new_place = petri_net.add_place(None);
-                    bpmn_id_to_incoming_place.insert(act_id.clone(),new_place);
-                    let mut to_places = HashMap::new();
-                    for p_id in sub_proc_ret_val.initial_places {
-                        to_places.insert(p_id,1);
-                    }
-                    let tx = PetriTransition::new(None,hash_map!{new_place=>1}, to_places);
-                    petri_net.add_transition(tx);
-                }
-            }
-            match sub_proc_ret_val.final_places.len() {
-                0 => {
-                    return Err(BpmnToPetriTranslationError::SubProcessMustHaveOneEndEvent);
-                },
-                1 => {
-                    // if the sub-process has a single end event, 
-                    // we can coincide the place that represent the target of this end event
-                    // with the outgoing place of the overall activity
-                    let final_place_id = sub_proc_ret_val.final_places.iter().next().unwrap();
-                    bpmn_id_to_outgoing_place.insert(act_id.clone(),*final_place_id);
-                },
-                _ => {
-                    // if the sub-process has several end events
-                    // we create an additional place
-                    // and a transition that accepts tokens from each of the place corresponding to the targets of these end events
-                    let new_place = petri_net.add_place(None);
-                    bpmn_id_to_outgoing_place.insert(act_id.clone(),new_place);
-                    let mut from_places = HashMap::new();
-                    for p_id in sub_proc_ret_val.final_places {
-                        from_places.insert(p_id,1);
-                    }
-                    let tx = PetriTransition::new(None,from_places, hash_map!{new_place=>1});
-                    petri_net.add_transition(tx);
-                }
-            }
+            let boundary_event = boundary_events_on_sub_processes.remove(act_id);
+            nest_sub_process(
+                &mut petri_net,
+                &mut bpmn_id_to_incoming_place,
+                &mut bpmn_id_to_outgoing_place,
+                &mut bpmn_id_to_transitions_labels,
+                act_id,
+                sub_proc_ret_val,
+                boundary_event
+            )?;
         } else {
             let incoming = petri_net.add_place(None);
             let outgoing = petri_net.add_place(None);
@@ -160,11 +125,217 @@ pub fn sub_process_to_petri(
             bpmn_id_to_outgoing_place.insert(act_id.clone(), outgoing);
         }
     }
-    // 
-    let ret_val = Bpmn2PetriSubProcessRetVal::new(
-        initial_places, 
-        final_places
+
+
+    let (gateways_inputs,gateways_outputs) = translate_sequence_flows(
+        bpmn, 
+        sub_process, 
+        &mut petri_net, 
+        &mut bpmn_id_to_incoming_place, 
+        &mut bpmn_id_to_outgoing_place
     );
+    
+    for gate_id in &sub_process.direct_child_gateways {
+        let gate = bpmn.gateways.get(gate_id).unwrap();
+        let gate_transition_label = Rc::new(PetriTransitionLabel::new(gate_id.id.clone()));
+        bpmn_id_to_transitions_labels.insert(gate_id.clone(),gate_transition_label.clone());
+
+        let inputs = gateways_inputs.get(gate_id).unwrap();
+        let outputs = gateways_outputs.get(gate_id).unwrap();
+        match gate.gateway_type {
+            GatewayType::Parallel => {
+                // there is a single transition 
+                // from all input places
+                // to all output places
+                let _ = petri_net.add_transition(
+                    PetriTransition::new(
+                        Some(gate_transition_label.clone()),
+                        inputs.iter().cloned().map(|x| (x,1)).collect(), 
+                        outputs.iter().cloned().map(|x| (x,1)).collect(), 
+                    )
+                );
+            },
+            GatewayType::Exclusive => {
+                // for each pair (input,output) there is a transition input->output
+                let mut tr_ids = HashSet::new();
+                for input_place in inputs {
+                    for output_place in outputs {
+                        let tr_id = petri_net.add_transition(
+                            PetriTransition::new(
+                                Some(gate_transition_label.clone()),
+                                hash_map!{*input_place=>1}, 
+                                hash_map! {*output_place=>1}
+                            )
+                        );
+                        tr_ids.insert(tr_id);
+                    }
+                }
+            },
+            GatewayType::Inclusive => {
+                // for each non-empty subset X of the inputs and each non-empty subset Y of the outputs
+                // there is a transition X->Y
+                let inputs_combinations = inputs.iter().powerset().collect::<Vec<_>>();
+                let outputs_combinations = outputs.iter().powerset().collect::<Vec<_>>();
+                let mut tr_ids = HashSet::new();
+                for input_subset in inputs_combinations {
+                    if !input_subset.is_empty() {
+                        for output_subset in outputs_combinations.clone() {
+                            if !output_subset.is_empty() {
+                                let tr_id = petri_net.add_transition(
+                                    PetriTransition::new(
+                                        Some(gate_transition_label.clone()),
+                                        input_subset.clone().into_iter().cloned().map(|x| (x,1)).collect(), 
+                                        output_subset.into_iter().cloned().map(|x| (x,1)).collect(),
+                                        )
+                                );
+                                tr_ids.insert(tr_id);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    //relabel_places
+    
+    /*petri_net.relabel_transitions(relabelling);
+    let mut initial_marking = Some(get_initial_marking_from_initial_places(&initial_places));
+    reduce_petri_net(&mut petri_net, &mut initial_marking);*/
+
+    let ret_val = Bpmn2PetriSubProcessRetVal{
+        petri_net,
+        initial_place,
+        initial_transition,
+        final_place,
+        final_transition,
+        bpmn_id_to_incoming_place,
+        bpmn_id_to_outgoing_place,
+        bpmn_id_to_transitions_labels
+    };
     Ok(ret_val)
 }
 
+
+
+
+fn translate_events(
+    bpmn : &Diagram, 
+    sub_process : &ProcessContentRef,
+    petri_net : &mut PetriNet,
+    bpmn_id_to_transitions_labels : &mut HashMap<BpmnId,Rc<PetriTransitionLabel>>,
+    bpmn_id_to_incoming_place : &mut HashMap<BpmnId,usize>, 
+    bpmn_id_to_outgoing_place : &mut HashMap<BpmnId,usize>, 
+) -> Result<(HashSet<usize>,HashSet<usize>,HashMap<BpmnId,BpmnId>),BpmnToPetriTranslationError> {
+
+    let mut initial_places = HashSet::new();
+    let mut final_places = HashSet::new();
+    let mut boundary_events_on_sub_processes : HashMap<BpmnId,BpmnId> = HashMap::new();
+    for evt_id in &sub_process.direct_child_events {
+        let evt = bpmn.events.get(evt_id).unwrap();
+        if let EventType::Boundary(associated_sub_proc) = &evt.event_type {
+            // we treat boundary events 
+            // (that are exclusively used to model exception flows interrupting sub-processes)
+            // differently
+            if boundary_events_on_sub_processes.contains_key(&associated_sub_proc) {
+                return Err(BpmnToPetriTranslationError::SubProcessCanHaveAtMostOneBoundaryEvent);
+            }
+            boundary_events_on_sub_processes.insert(associated_sub_proc.clone(), evt_id.clone());
+        } else {
+            // for the other event kinds,
+            // we crate two places (incoming and outgoing) and a transition between them
+            let incoming = petri_net.add_place(None);
+            if evt.event_type == EventType::Start {
+                initial_places.insert(incoming);
+            }
+            let outgoing = petri_net.add_place(None);
+            if evt.event_type == EventType::End {
+                final_places.insert(outgoing);
+            }
+            // ***
+            // ***
+            let transition_label = Rc::new(PetriTransitionLabel::new(evt_id.id.clone()));
+            bpmn_id_to_transitions_labels.insert(evt_id.clone(),transition_label.clone());
+            let _ = petri_net.add_transition(
+                PetriTransition::new(
+                    Some(transition_label),
+                    hash_map!{incoming=>1}, 
+                    hash_map!{outgoing=>1}
+                )
+            );
+            bpmn_id_to_incoming_place.insert(evt_id.clone(), incoming);
+            bpmn_id_to_outgoing_place.insert(evt_id.clone(), outgoing);
+        }
+    }
+
+    if initial_places.is_empty() {
+        Err(BpmnToPetriTranslationError::SubProcessMustHaveOneStartEvent)
+    } else if final_places.is_empty() {
+        Err(BpmnToPetriTranslationError::SubProcessMustHaveOneEndEvent)
+    } else {
+        Ok((initial_places,final_places,boundary_events_on_sub_processes))
+    }
+}
+
+
+
+
+
+fn translate_sequence_flows(
+    bpmn : &Diagram, 
+    sub_process : &ProcessContentRef,
+    petri_net : &mut PetriNet,
+    bpmn_id_to_incoming_place : &mut HashMap<BpmnId,usize>, 
+    bpmn_id_to_outgoing_place : &mut HashMap<BpmnId,usize>, 
+) -> (HashMap<BpmnId, BTreeSet<usize>>,HashMap<BpmnId, BTreeSet<usize>>) {
+    let mut gateways_inputs : HashMap<BpmnId, BTreeSet<usize>> = HashMap::new();
+    let mut gateways_outputs : HashMap<BpmnId, BTreeSet<usize>> = HashMap::new();
+    for flow_id in &sub_process.direct_child_flows {
+        let flow = bpmn.sequence_flows.get(flow_id).unwrap();
+        let source_is_gate = bpmn.gateways.contains_key(&flow.source_ref);
+        let target_is_gate = bpmn.gateways.contains_key(&flow.target_ref);
+        match (source_is_gate,target_is_gate) {
+            (false, false) => {
+                // both source and target of the flow are not gates
+                // thus they already have corresponding outgoing and incoming places in the net
+                // we then simply add the corresponding transition
+                let origin = bpmn_id_to_outgoing_place.get(&flow.source_ref).unwrap();
+                let target = bpmn_id_to_incoming_place.get(&flow.target_ref).unwrap();
+                let tx = PetriTransition::new(None,hash_map! {*origin=>1}, hash_map! {*target=>1});
+                petri_net.add_transition(tx);
+            },
+            (true, false) => {
+                // the source of the flow is a gate and its target is not
+                // the target already has a corresponding incoming place in the net
+                // we therefore add to our "gateways_output" the relevant information
+                let target = bpmn_id_to_incoming_place.get(&flow.target_ref).unwrap();
+                gateways_outputs
+                    .entry(flow.source_ref.clone())
+                    .and_modify(|x| {x.insert(*target);})
+                    .or_insert(btree_set!{*target});
+            },
+            (false, true) => {
+                // similar to above case
+                let source = bpmn_id_to_outgoing_place.get(&flow.source_ref).unwrap();
+                gateways_inputs
+                    .entry(flow.target_ref.clone())
+                    .and_modify(|x| {x.insert(*source);})
+                    .or_insert(btree_set!{*source});
+            },
+            (true, true) => {
+                // both source and target of the flow are gates
+                // we add an intermediate place to handle the complexity
+                let new_place = petri_net.add_place(None);
+                gateways_outputs
+                    .entry(flow.source_ref.clone())
+                    .and_modify(|x| {x.insert(new_place);})
+                    .or_insert(btree_set!{new_place});
+                gateways_inputs
+                    .entry(flow.target_ref.clone())
+                    .and_modify(|x| {x.insert(new_place);})
+                    .or_insert(btree_set!{new_place});
+            },
+        }
+    }
+    (gateways_inputs,gateways_outputs)
+}
