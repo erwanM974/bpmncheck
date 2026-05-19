@@ -1,6 +1,6 @@
 [package]
 name = "bpmncheck"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Erwan Mahe"]
 edition = "2024"
 

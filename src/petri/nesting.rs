@@ -22,44 +22,33 @@ use map_macro::hash_map;
 use petricheck::model::{label::PetriTransitionLabel, net::PetriNet, transition::PetriTransition};
 
 use crate::model::id::BpmnId;
-use crate::petri::{error::BpmnToPetriTranslationError, subprocess::Bpmn2PetriSubProcessRetVal};
+use crate::petri::{error::BpmnToPetriTranslationError, subprocess::Bpmn2PetriSubProcessStartEndInfo};
 
 
 
 pub fn nest_sub_process(
+    transitions_labelling : &HashMap<BpmnId, Option<Rc<PetriTransitionLabel>>>,
     petri_net : &mut PetriNet,
     // maps bpmn_id of events and activities to the place in the Petri Net from which it starts
     bpmn_id_to_incoming_place : &mut HashMap<BpmnId,usize>, 
     // maps bpmn_id of events and activities to the place in the Petri Net at which it ends
-    bpmn_id_to_outgoing_place : &mut HashMap<BpmnId,usize>, 
-    // maps bpmn_id of events and activities to reference to the transition labels in the Petri Net
-    bpmn_id_to_transitions_labels : &mut HashMap<BpmnId,Rc<PetriTransitionLabel>>,
+    bpmn_id_to_outgoing_place : &mut HashMap<BpmnId,usize>,
     act_id : &BpmnId,
     //sub_proc : &ProcessContentRef,
-    sub_proc_ret_val : Bpmn2PetriSubProcessRetVal,
+    sub_proc_pn : PetriNet,
+    sub_proc_start_end_info : Bpmn2PetriSubProcessStartEndInfo,
     boundary_event : Option<BpmnId>
 ) -> Result<(),BpmnToPetriTranslationError> {
-    // ***
-
     // **
-    let (places_shift,transitions_shift) = petri_net.integrate_sub_net(&sub_proc_ret_val.petri_net);
-    bpmn_id_to_incoming_place.extend(
-        sub_proc_ret_val.bpmn_id_to_incoming_place.into_iter().map(|(x,y)| (x,y+places_shift))
-    );
-    bpmn_id_to_outgoing_place.extend(
-        sub_proc_ret_val.bpmn_id_to_outgoing_place.into_iter().map(|(x,y)| (x,y+places_shift))
-    );
-    bpmn_id_to_transitions_labels.extend(
-        sub_proc_ret_val.bpmn_id_to_transitions_labels
-    );
+    let (places_shift,transitions_shift) = petri_net.integrate_sub_net(&sub_proc_pn);
     // ***
-    bpmn_id_to_incoming_place.insert(act_id.clone(),sub_proc_ret_val.initial_place + places_shift);
-    bpmn_id_to_outgoing_place.insert(act_id.clone(),sub_proc_ret_val.final_place + places_shift);
-    if let Some(boundary) = boundary_event {
+    bpmn_id_to_incoming_place.insert(act_id.clone(),sub_proc_start_end_info.initial_place + places_shift);
+    bpmn_id_to_outgoing_place.insert(act_id.clone(),sub_proc_start_end_info.final_place + places_shift);
+    if let Some(boundary_evt_id) = boundary_event {
         // cf page 10 in https://www.researchgate.net/publication/27467826_Formal_Semantics_and_Automated_Analysis_of_BPMN_Process_Models 
         let ok_flag_place = petri_net.add_place(None);
-        let sub_proc_start_tx_id = sub_proc_ret_val.initial_transition + transitions_shift;
-        let sub_proc_end_tx_id = sub_proc_ret_val.final_transition + transitions_shift;
+        let sub_proc_start_tx_id = sub_proc_start_end_info.initial_transition + transitions_shift;
+        let sub_proc_end_tx_id = sub_proc_start_end_info.final_transition + transitions_shift;
         // the start transition of the subprocess needs to activate the "ok_flag_place"
         {
             let subproc_start_tx = petri_net.transitions.get_mut(sub_proc_start_tx_id).unwrap();
@@ -68,18 +57,17 @@ pub fn nest_sub_process(
         let nok_flag_place = petri_net.add_place(None);
         {
             // the transition between the "ok" and "nok" corresponds to the occurrence of the exception 
-            let exception_transition_label = Rc::new(PetriTransitionLabel::new(boundary.id.clone()));
+            let exception_transition_label = transitions_labelling.get(&boundary_evt_id).unwrap().clone();
             petri_net.add_transition(
                 PetriTransition::new(
-                    Some(exception_transition_label.clone()),
+                    exception_transition_label,
                     hash_map! {ok_flag_place=>1}, 
                     hash_map! {nok_flag_place=>1}
                 )
             );
-            bpmn_id_to_transitions_labels.insert(boundary.clone(), exception_transition_label);
         }
         // if the "nok" place is active, every transition (other than the initial and final) in the subprocess can be "skipped"
-        for unshifted_tx_id in 0..sub_proc_ret_val.petri_net.transitions.len() {
+        for unshifted_tx_id in 0..sub_proc_pn.transitions.len() {
             let tx_id = unshifted_tx_id + transitions_shift;
             if tx_id != sub_proc_start_tx_id && tx_id != sub_proc_end_tx_id {
                 let original_subproc_tx = petri_net.transitions.get(tx_id).unwrap();
@@ -122,7 +110,7 @@ pub fn nest_sub_process(
             subproc_end_tx.preset_tokens.insert(ok_flag_place,1); 
         }
         // all the other transitions inside the subprocess require the "ok_flag_place" to have one token 
-        for unshifted_tx_id in 0..sub_proc_ret_val.petri_net.transitions.len() {
+        for unshifted_tx_id in 0..sub_proc_pn.transitions.len() {
             let tx_id = unshifted_tx_id + transitions_shift;
             if tx_id != sub_proc_start_tx_id && tx_id != sub_proc_end_tx_id {
                 let subproc_tx = petri_net.transitions.get_mut(tx_id).unwrap();
@@ -131,7 +119,7 @@ pub fn nest_sub_process(
             }
         }
         // finally we update the map of bpmnid to outgoing place
-        bpmn_id_to_outgoing_place.insert(boundary,after_exception_place);
+        bpmn_id_to_outgoing_place.insert(boundary_evt_id,after_exception_place);
     }
     Ok(())
 }

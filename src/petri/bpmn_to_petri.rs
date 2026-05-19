@@ -17,25 +17,23 @@ limitations under the License.
 
 use std::{collections::{HashMap, HashSet}, rc::Rc};
 use map_macro::{hash_map};
-use petricheck::{model::{label::PetriTransitionLabel, net::PetriNet, transition::PetriTransition}};
+use petricheck::{model::{label::PetriTransitionLabel, marking::Marking, net::PetriNet, transition::PetriTransition}, reduction::reduce::reduce_petri_net};
 
-use crate::{model::{ diagram::Diagram, id::BpmnId}, petri::{error::BpmnToPetriTranslationError, subprocess::sub_process_to_petri}};
+use crate::{model::{ diagram::Diagram, event::EventType, id::BpmnId}, petri::{error::BpmnToPetriTranslationError, initial_marking::get_initial_marking_from_initial_places, subprocess::sub_process_to_petri}};
 
 
 
 
 pub struct BpmnToPetriRetVal {
     pub petri_net : PetriNet,
-    pub initial_places : HashSet<usize>,
-    pub bpmn_id_to_transitions_labels : HashMap<BpmnId,Rc<PetriTransitionLabel>>
+    pub initial_marking : Marking
 }
 
 impl BpmnToPetriRetVal {
-    pub fn new(petri_net: PetriNet, initial_places: HashSet<usize>, bpmn_id_to_transitions_labels: HashMap<BpmnId,Rc<PetriTransitionLabel>>) -> Self {
-        Self { petri_net, initial_places, bpmn_id_to_transitions_labels }
+    pub fn new(petri_net: PetriNet, initial_marking: Marking) -> Self {
+        Self { petri_net, initial_marking }
     }
 }
-
 
 
 
@@ -46,38 +44,63 @@ impl BpmnToPetriRetVal {
  * **/
 pub fn bpmn_to_petri(
     bpmn : &Diagram,
+    transitions_labelling : &HashMap<BpmnId, Option<Rc<PetriTransitionLabel>>>
 ) -> Result<BpmnToPetriRetVal,BpmnToPetriTranslationError> {
     let mut petri_net = PetriNet::new_empty();
     let mut initial_places = HashSet::new();
-    let mut bpmn_id_to_incoming_place : HashMap<BpmnId,usize> = HashMap::new();
-    let mut bpmn_id_to_outgoing_place : HashMap<BpmnId,usize> = HashMap::new();
-    let mut bpmn_id_to_transitions_labels = HashMap::new();
     for process in bpmn.top_level_processes.values() {
         let petri_part = sub_process_to_petri(
             bpmn, 
+            true,
             &process.content,
+            transitions_labelling
         )?;
         let (places_shift,_) = petri_net.integrate_sub_net(&petri_part.petri_net);
-        initial_places.insert(petri_part.initial_place + places_shift);
-        bpmn_id_to_incoming_place.extend(
-            petri_part.bpmn_id_to_incoming_place.into_iter().map(|(x,y)| (x,y+places_shift))
-        );
-        bpmn_id_to_outgoing_place.extend(
-            petri_part.bpmn_id_to_outgoing_place.into_iter().map(|(x,y)| (x,y+places_shift))
-        );
-        bpmn_id_to_transitions_labels.extend(
-            petri_part.bpmn_id_to_transitions_labels
-        );
+        for init_place in petri_part.as_top_level() {
+            initial_places.insert(init_place + places_shift);
+        }
     }
+    // *** 
+    let mut throw_evts_outgoing_places = HashMap::new();
+    let mut catch_evts_incoming_places = HashMap::new();
+    for (place_id,opt_place_label) in petri_net.places.iter().enumerate() {
+        if let Some(place_label) = opt_place_label {
+            // we have labelled only throw and catch events
+            let evt_bpmn_id = BpmnId { id: place_label.label.clone() };
+            let evt = bpmn.events.get(&evt_bpmn_id).unwrap();
+            match evt.event_type {
+                EventType::IntermediateCatch => {
+                    catch_evts_incoming_places.insert(evt_bpmn_id, place_id);
+                },
+                EventType::IntermediateThrow => {
+                    throw_evts_outgoing_places.insert(evt_bpmn_id, place_id);
+                },
+                _ => {
+                    panic!("should not occur")
+                },
+            }
+        }
+    }
+    // ***
     for msg_flow in bpmn.message_flows.values() {
-        let origin = bpmn_id_to_outgoing_place.get(&msg_flow.source_ref).unwrap();
-        let target = bpmn_id_to_incoming_place.get(&msg_flow.target_ref).unwrap();
-        initial_places.remove(target);
-        let tx = PetriTransition::new(None,hash_map! {*origin=>1}, hash_map! {*target=>1});
+        let origin_place_id = *throw_evts_outgoing_places.get(&msg_flow.source_ref)
+            .ok_or(BpmnToPetriTranslationError::MessageFlowSourceIsNotAnIntermediateThrowEvent)?;
+        let target_place_id = *catch_evts_incoming_places.get(&msg_flow.target_ref)
+            .ok_or(BpmnToPetriTranslationError::MessageFlowTargetIsNotAnIntermediateCatchEvent)?;
+        let tx = PetriTransition::new(None,hash_map! {origin_place_id=>1}, hash_map! {target_place_id=>1});
         petri_net.add_transition(tx);
     }
+    // The throw/catch event place labels were only needed to locate the places for message-flow
+    // wiring. Strip them now so the series-place reduction can merge connected pairs.
+    for place_id in throw_evts_outgoing_places.values().chain(catch_evts_incoming_places.values()) {
+        petri_net.places[*place_id] = None;
+    }
+
+    let mut initial_marking = Some(get_initial_marking_from_initial_places(&initial_places));
+    reduce_petri_net(&mut petri_net, &mut initial_marking);
+
     
-    Ok(BpmnToPetriRetVal::new(petri_net,initial_places,bpmn_id_to_transitions_labels))
+    Ok(BpmnToPetriRetVal::new(petri_net,initial_marking.unwrap()))
 }
 
 

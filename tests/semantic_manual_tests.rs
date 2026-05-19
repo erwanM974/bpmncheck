@@ -18,13 +18,13 @@ limitations under the License.
 
 
 
-use std::{collections::{HashMap, HashSet}, rc::Rc};
+use std::{collections::HashSet, rc::Rc};
 
-use bpmncheck::{parser::bpmn::read_bpmn_diagram_from_file_path, petri::{bpmn_to_petri::bpmn_to_petri, initial_marking::get_initial_marking_from_initial_places}};
+use bpmncheck::{parser::bpmn::read_bpmn_diagram_from_file_path, petri::bpmn_to_petri::bpmn_to_petri};
 use citreelo::{parser::CtlFormulaParser, solve::is_ctl_formula_sat, util::viz_kripke::KripkeStructureGraphvizDrawer};
 use graphviz_dot_builder::traits::{DotPrintable, GraphVizOutputFormat};
 use map_macro::hash_set;
-use petricheck::{model::label::PetriTransitionLabel, model_checking::to_kripke::{PetriKripkeGenerationSafenessRequirement, PetriKripkeStateProducer, petri_to_kripke}, reduction::reduce::reduce_petri_net, util::{parse_ctl::parser::BuiltinPetriCtlParser, vizualisation::{kripke_viz::PetriKripkeVisualizer, petri_viz::petri_repr}}};
+use petricheck::{model::label::PetriTransitionLabel, model_checking::to_kripke::{PetriKripkeGenerationSafenessRequirement, PetriKripkeStateProducer, petri_to_kripke}, util::{parse_ctl::parser::BuiltinPetriCtlParser, vizualisation::{kripke_viz::PetriKripkeVisualizer, petri_viz::petri_repr}}};
 
 
 
@@ -36,20 +36,11 @@ fn tool_test_bpmn_semantic_manual(
 ) {
     let bpmn = read_bpmn_diagram_from_file_path(bpmn_file_path).unwrap();
     // ***
-    let petri_retval = bpmn_to_petri(&bpmn).unwrap();
-    let mut initial_marking = Some(get_initial_marking_from_initial_places(&petri_retval.initial_places));
-    let mut petri_net = petri_retval.petri_net.clone();
-    // we will relabel the petri net
-    // replacing all labels by the empty label
-    // except for tasks, which will be labelled by their names (we do suppose all of them do have names)
-    let mut relabelling : HashMap<PetriTransitionLabel, Option<Rc<PetriTransitionLabel>>> = HashMap::new();
-    let mut tagged_transition_labels = HashSet::new();
-    for (bpmnid,tr_lab) in petri_retval.bpmn_id_to_transitions_labels {
+    let transitions_relabelling = bpmn.get_all_bpmn_ids().into_iter().map(|bpmnid| {
         let new_label = if let Some(act) = bpmn.activities.get(&bpmnid) && act.activity_type.is_task() {
             match &act.name {
                 Some(x) => {
                     let new_tr_lab = PetriTransitionLabel::new(x.to_string());
-                    tagged_transition_labels.insert(new_tr_lab.clone());
                     Some(Rc::new(new_tr_lab))
                 }
                 None => None,
@@ -57,41 +48,49 @@ fn tool_test_bpmn_semantic_manual(
         } else {
             None
         };
-        relabelling.insert((*tr_lab).clone(), new_label);
-    }
-    petri_net.relabel_transitions(&relabelling);
+        (bpmnid,new_label)
+    }).collect();
+
     // ***
-    reduce_petri_net(&mut petri_net, &mut initial_marking);
+    let petri_retval = bpmn_to_petri(&bpmn,&transitions_relabelling).unwrap();
+
     {
         let _ = std::fs::create_dir("tests_outputs");
         let _ = std::fs::create_dir("tests_outputs/semantic_manual");
-        let gv = petri_repr(&petri_net,&initial_marking);
+        let gv = petri_repr(&petri_retval.petri_net, &Some(petri_retval.initial_marking.clone()));
         let _ = gv.print_dot(
-            &["tests_outputs".to_string(),"semantic_manual".to_string()], 
-            &format!("{}_petri_reduced", bpmn_name), 
+            &["tests_outputs".to_string(),"semantic_manual".to_string()],
+            &format!("{}_petri", bpmn_name),
             &GraphVizOutputFormat::png
         );
     }
-    // *** 
-    // we then generate a kripke structure with all transition labelled as "previous"
-    let im = initial_marking.unwrap();
+
+
+    let tagged_transition_labels: HashSet<PetriTransitionLabel> = transitions_relabelling
+        .into_iter()
+        .filter_map(|(_, x)| x)
+        .map(|rc| (*rc).clone())
+        .collect();
+    // ***
     let kripke = petri_to_kripke(
-        &petri_net, 
-        im, 
-        &PetriKripkeStateProducer::new(tagged_transition_labels), 
+        &petri_retval.petri_net,
+        petri_retval.initial_marking,
+        &PetriKripkeStateProducer::new(tagged_transition_labels),
         &PetriKripkeGenerationSafenessRequirement::KSafeness(1)
     ).unwrap();
 
     {
-        let gv = PetriKripkeVisualizer::new(&petri_net).get_kripke_repr(&kripke);
+        let _ = std::fs::create_dir("tests_outputs");
+        let _ = std::fs::create_dir("tests_outputs/semantic_manual");
+        let gv = PetriKripkeVisualizer::new(&petri_retval.petri_net).get_kripke_repr(&kripke);
         gv.print_dot(
-            &["tests_outputs".to_string(),"semantic_manual".to_string()], 
+            &["tests_outputs".to_string(),"semantic_manual".to_string()],
             &format!("{}_kripke", bpmn_name),
             &GraphVizOutputFormat::png
         ).unwrap();
     }
 
-    let ctl_parser = BuiltinPetriCtlParser::from_net(&petri_net).unwrap();
+    let ctl_parser = BuiltinPetriCtlParser::from_net(&petri_retval.petri_net).unwrap();
     let (_,semantic_formula) = ctl_parser.parse_ctl_formula::<nom::error::Error<&str>>(semantic_formula_str).unwrap();
     assert!(
         is_ctl_formula_sat(&kripke, &hash_set!{0}, &semantic_formula),

@@ -15,11 +15,11 @@ limitations under the License.
 */
 
 
-use bpmncheck::{parser::bpmn::read_bpmn_diagram_from_file_path, petri::{bpmn_to_petri::bpmn_to_petri, initial_marking::get_initial_marking_from_initial_places}, viz::bpmn_viz::bpmn_repr};
-use graphviz_dot_builder::traits::{DotPrintable, GraphVizOutputFormat};
-use petricheck::reduction::reduce::reduce_petri_net;
+use std::rc::Rc;
 
-use petricheck::util::vizualisation::petri_viz::petri_repr;
+use bpmncheck::{parser::bpmn::read_bpmn_diagram_from_file_path, petri::bpmn_to_petri::bpmn_to_petri, viz::bpmn_viz::bpmn_repr};
+use graphviz_dot_builder::traits::{DotPrintable, GraphVizOutputFormat};
+use petricheck::{model::label::PetriTransitionLabel, util::vizualisation::petri_viz::petri_repr};
 
 
 
@@ -37,23 +37,16 @@ fn tool_test_to_petri(bpmn_file_path : &str, name : &str) {
             &GraphVizOutputFormat::png
         );
     }
-    let petri_retval = bpmn_to_petri(&bpmn).unwrap();
-    let mut initial_marking = Some(get_initial_marking_from_initial_places(&petri_retval.initial_places));
-    let mut petri_net = petri_retval.petri_net.clone();
+    let transitions_relabelling = bpmn.get_all_bpmn_ids().into_iter().map(|bpmnid| {
+        let label = Some(Rc::new(PetriTransitionLabel::new(bpmnid.id.clone())));
+        (bpmnid, label)
+    }).collect();
+    let petri_retval = bpmn_to_petri(&bpmn, &transitions_relabelling).unwrap();
     {
-        let gv = petri_repr(&petri_net,&initial_marking);
+        let gv = petri_repr(&petri_retval.petri_net, &Some(petri_retval.initial_marking));
         let _ = gv.print_dot(
-            &[".".to_string()], 
-            &format!("{}/{}_petri",folder_name, name), 
-            &GraphVizOutputFormat::png
-        );
-    }
-    reduce_petri_net(&mut petri_net, &mut initial_marking);
-    {
-        let gv = petri_repr(&petri_net,&initial_marking);
-        let _ = gv.print_dot(
-            &[".".to_string()], 
-            &format!("{}/{}_petri_reduced",folder_name, name), 
+            &[".".to_string()],
+            &format!("{}/{}_petri_reduced", folder_name, name),
             &GraphVizOutputFormat::png
         );
     }

@@ -17,7 +17,7 @@ limitations under the License.
 
 
 use crate::model::{activity::Activity, event::Event, flow::Flow, gateway::Gateway, id::BpmnId};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 
 
@@ -80,6 +80,18 @@ impl Diagram {
         message_flows: HashMap<BpmnId,Flow>, 
         data: HashMap<BpmnId,String>) -> Self {
         Self { top_level_processes, events, activities, gateways, sequence_flows, message_flows, data }
+    }
+
+    pub fn get_all_bpmn_ids(&self) -> HashSet<BpmnId> {
+        self.top_level_processes.keys()
+            .chain(self.events.keys())
+            .chain(self.activities.keys())
+            .chain(self.gateways.keys())
+            .chain(self.sequence_flows.keys())
+            .chain(self.message_flows.keys())
+            .chain(self.data.keys())
+            .cloned()
+            .collect()
     }
 }
 

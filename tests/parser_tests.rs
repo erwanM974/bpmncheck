@@ -349,6 +349,10 @@ fn test_parser_basic_bpmn_with_gateway() {
 
 
 
+#[test]
+fn test_parser_missing_file() {
+    assert!(read_bpmn_diagram_from_file_path("nonexistent.bpmn").is_err());
+}
 
 
 
